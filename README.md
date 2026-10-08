@@ -616,7 +616,54 @@ find_definition(symbol="ToolCallParser")
 
 ---
 
-## 四、通用适配清单
+## 四、CLI 与桌面端的环境差异（关键）
+
+**两者共用同一份 `~/.codex/config.toml`，但环境变量不共享。**
+这是搭本地代理时最容易踩坑的地方。
+
+### 差异对照
+
+| 维度 | CLI（`~/.local/bin/codex`） | 桌面应用（Desktop / Automation） |
+|---|---|---|
+| 读取 `config.toml` | ✅ 每次 | ✅ **仅启动时读一次** |
+| 能否拿到 wrapper 里的 `NO_PROXY` | ✅ 能 | ❌ **不能** |
+| 遵守系统代理例外列表 | — | ❌ **不遵守**（只认 `NO_PROXY` 环境变量） |
+
+### 实测证据
+
+同一个代理地址，两种调用方式结果相反：
+
+```text
+curl 直连          -> HTTP 200   # curl 遵守系统代理的例外列表
+原生 Codex 二进制   -> HTTP 502   # 不遵守，必须有 NO_PROXY
+加上 NO_PROXY   -> 正常（turn.started）
+```
+
+### 推荐部署方式：分层，不要全局改 `base_url`
+
+**不要直接把 `config.toml` 的 `base_url` 指向本地代理**，否则：
+桌面端会连代理但拿不到 `NO_PROXY` → 被系统代理拦截 → **502，且会话与
+automation 全部失败**（实测确证）。
+
+正确做法：
+
+```text
+config.toml            → 直连网关（桌面端 / automation 用，永远安全）
+~/.local/bin/codex     → wrapper 注入 -c base_url=代理（仅 CLI 用，自带 NO_PROXY）
+LaunchAgent            → launchctl setenv NO_PROXY（持久化，重启后 GUI 继承）
+```
+
+模板见 `tools/codex-wrapper.zsh.template`。
+
+### 其他环境差异
+
+- **`hooks.json` 是热加载的**：修改 hook 后无需重启应用（实测：启动于 18:05 的进程调用了 21:18 才加入的 hook）；
+- **`config.toml` 不热加载**：改 `base_url` / `model` / `model_provider` 后必须重启应用；
+- 可用 `tools/verify-proxy-live.py` 判定改动是否已对桌面端生效。
+
+---
+
+## 五、通用适配清单
 
 接入任何「Responses API 兼容」的第三方模型时，逐项核对：
 
@@ -650,7 +697,7 @@ find_definition(symbol="ToolCallParser")
 
 ---
 
-## 五、工具箱
+## 六、工具箱
 
 | 文件 | 用途 |
 |---|---|
@@ -689,7 +736,7 @@ python3 tools/dsml_normalize_proxy.py
 
 ---
 
-## 六、单元测试
+## 七、单元测试
 
 DSML 解析器带确定性测试，覆盖标准形态与已知的几类畸形变体：
 
@@ -713,7 +760,7 @@ python3 tests/test_dsml_parsing.py
 
 ---
 
-## 七、快速自检
+## 八、快速自检
 
 
 ```bash
@@ -735,7 +782,7 @@ python3 tools/deepseek-compat-check.py
 
 ---
 
-## 八、参考
+## 九、参考
 
 ### 上游 issue / PR
 

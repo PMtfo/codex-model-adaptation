@@ -1,0 +1,33 @@
+#!/bin/zsh
+# WorkBuddy / Codex CLI wrapper
+#
+# 作用：仅在 **CLI 路径** 上启用本地 DSML 归一化代理，并为回环地址设置 NO_PROXY。
+#
+# 为什么不直接改 config.toml 的 base_url：
+#   Codex Desktop 与 CLI 共用 ~/.codex/config.toml，而 Desktop 进程
+#   拿不到 wrapper 里的 NO_PROXY。系统代理（Clash）会拦截
+#   127.0.0.1 请求并返回 502，导致桌面会话与 automation 全部失败。
+#   因此代理只能在 CLI 这一侧开启。
+#
+# 作用二：代理不可用时自动回退直连（不阻断工具链）。
+#
+# 回滚：删除本文件，并把 ~/.local/bin/.codex-wrapper-backup.txt
+#   里的路径恢复为同名软链即可。
+
+export NO_PROXY="127.0.0.1,localhost,::1,0.0.0.0${NO_PROXY:+,$NO_PROXY}"
+export no_proxy="$NO_PROXY"
+
+REAL="$HOME/.local/codex-0.153.0/codex-aarch64-apple-darwin"
+PROBE="http://127.0.0.1:8899/"
+
+if /usr/bin/curl -s -o /dev/null -m 1 "$PROBE" 2>/dev/null; then
+  exec "$REAL" -c 'model_providers.my_gateway.base_url="http://127.0.0.1:8899/v1"' "$@"
+fi
+
+sleep 2
+if /usr/bin/curl -s -o /dev/null -m 1 "$PROBE" 2>/dev/null; then
+  exec "$REAL" -c 'model_providers.my_gateway.base_url="http://127.0.0.1:8899/v1"' "$@"
+fi
+
+echo "[codex-wrapper] 归一化代理不可用，本轮直连网关（将失去 DSML/XML 自动归一化）。" >&2
+exec "$REAL" "$@"
