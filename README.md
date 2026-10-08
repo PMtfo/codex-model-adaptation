@@ -507,6 +507,18 @@ failed to spawn code-mode host /Users/<user>/.local/bin/codex-code-mode-host:
 `function_call(name=apply_patch)` 的 `arguments.patch` 取出，
 重写成 freeform 调用的原始入参。无法确定形状时保持原样（fail-closed），不猜测。
 
+**本机实测（已复现）**：对同一网关的多个模型发 `apply_patch` 工具声明，
+它们**全部**返回嵌套对象形状，而非 Codex 期望的原始文本：
+
+| 模型 | `apply_patch` 参数形状 |
+|---|---|
+| GLM 5.3 | `{"patch": "*** Begin Patch..."}` |
+| GLM 5.3 Flash | `{"patch": "..."}` |
+| DeepSeek V4.1 Flash | `{"patch": "..."}` |
+
+这说明该问题**不限于 GLM**，而是「三方模型按常规 function call 返回」
+与「Codex 把 apply_patch 声明为 freeform」之间的通用契约差异。
+
 **佐证**：CodexHub issue #105
 
 #### G2：单 chunk 上游导致 tool_call arguments 翻倍（重要）
