@@ -46,7 +46,8 @@
 | G2 | 单 chunk 上游导致 tool_call arguments 翻倍 | GLM 系 | 重要 | 适配层 |
 | M1 | 消息顺序校验严格，tool result 必须紧跟 tool call | MiniMax 系 | 阻断 | 顺序修复 |
 | Q1 | `<tool_call>` 内 Python 风格调用不被识别 | Qwen 系 | 重要 | 解析器 |
-| Q2 | `<function>` 标签 + 连字符 MCP 名称解析 | Qwen3-Coder | 重要 | 解析器 |
+| Q2 | `<function=NAME>` 隐式开头不被识别（前言行导致丢调用） | Qwen3-Coder | 重要 | 解析器 |
+| Q3 | 连字符 MCP 工具名被截断 | Qwen / MCP | 重要 | 解析器 |
 
 ---
 
@@ -214,12 +215,23 @@ Codex 依据 provider 的**显示名**决定是否走远程压缩（源码里是
 用户以为已启用最高推理强度，实际与 `high` 相同；
 配合 [D1](#d1-dsml-工具调用未被归一化阻断级) 的 #53831，深档位反而更容易丢工具调用。
 
+此外还有一类**更彻底**的失效：某些路由层**完全没有把 effort 传到上游**。
+此时界面显示 `Max`，但日志里 `Effort: -`，请求体中既无 `requestedEffort`
+也无 `reasoningWireField`，在 DeepSeek 与 GLM 上都能复现，主对话与子 agent 路径都受影响。
+
 #### 修复
 
-属于网关/上游映射问题，本地无法根治。建议二选一：
+属于网关/上游映射问题，本地无法根治。建议按顺序排查：
 
-1. 网关侧正确映射 `xhigh`；
-2. 若上游确实没有更高档位，请在模型目录中如实标注可选档位，避免误导。
+1. **先确认 effort 是否被传递**——对比不同档位的 `reasoning_tokens`，
+   若各档位数值几乎相同，说明映射缺失或档位未生效；
+2. 网关侧正确转发并映射 `xhigh`（含路由层、子 agent 路径）；
+3. 若上游确实没有更高档位，请在模型目录中如实标注可选档位，避免误导用户。
+
+#### 佐证
+
+- opencodex issue #1100：Reasoning effort selected in Codex Desktop is not propagated
+  to routed DeepSeek and GLM models
 
 ---
 
@@ -388,12 +400,39 @@ find_definition(symbol="ToolCallParser")
 
 **佐证**：macprovider PR #160
 
-#### Q2：`<function>` 标签 + 连字符 MCP 名称（重要）
+#### Q2：`<function=NAME>` 隐式开头不被识别（重要，高频）
 
-**现象**：Qwen3-Coder 使用 `<function>` 标签，且 MCP 工具名常带连字符
-（如 `mcp-server__tool-name`）。按 `_` 分词或只匹配 `\w+` 的解析器会截断名称。
+**现象**：Qwen3-Coder 的系统提示允许模型在工具调用前先说一句推理。
+一旦模型说了这句，它**常常省略 `<tool_call>` 开头**，只留下：
 
-**修复**：名称字符集需覆盖连字符；同时支持 `<function>` 作为 invoke 起始标签。
+```text
+我先看一下这个符号的定义。
+<function=find_definition>
+<parameter=symbol>ToolCallParser</parameter>
+</function>
+</tool_call>
+```
+
+如果解析器只认字面量 `<tool_call>` 作为触发点，整个块就被当作**普通文本**放行：
+**没有报错、没有日志，工具调用直接消失**。
+
+值得注意的是：**工具越多、提示越长，模型越倾向于加这句前言**，因此该问题在大规模工具集下更容易出现。
+
+**修复**：把裸的 `<function=` 也当作合法的（隐式）起始标记，与 `<tool_call>` 等价处理。
+
+**佐证**：
+
+- ollama PR #18538：`recognize <function= as an implicit qwen3-coder tool-call opener`
+- llama.cpp issue #26987：延迟触发条件在同时缺失 `<tool_call>` 与 `<function=` 时永不触发
+- odysseus issue #6412（open）：`<function=NAME>` 标记未被解析，文本模式工具调用永不执行
+- sglang PR #42579：同类解析器的正则扫描性能修复
+
+#### Q3：连字符 MCP 工具名被截断（重要）
+
+**现象**：MCP 工具名常带连字符（如 `mcp-server__tool-name`）。
+按 `_` 分词或只匹配 `\w+` 的解析器会把名称截断，导致调用不存在或名称错误的工具。
+
+**修复**：工具名允许的字符集需覆盖 `-`；解析后再与实际注册的工具名做校验。
 
 **佐证**：macprovider PR #844
 
