@@ -515,6 +515,11 @@ failed to spawn code-mode host /Users/<user>/.local/bin/codex-code-mode-host:
 | GLM 5.3 | `{"patch": "*** Begin Patch..."}` |
 | GLM 5.3 Flash | `{"patch": "..."}` |
 | DeepSeek V4.1 Flash | `{"patch": "..."}` |
+| MiniMax M3 | `{"patch": "..."}` |
+| Qwen3.8 Flash / Max | `{"patch": "..."}` |
+| Step 5 Preview | `{"patch": "..."}` |
+
+**全部 8 个受测模型 8/8 均返回嵌套形状**。
 
 这说明该问题**不限于 GLM**，而是「三方模型按常规 function call 返回」
 与「Codex 把 apply_patch 声明为 freeform」之间的通用契约差异。
