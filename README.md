@@ -141,6 +141,15 @@ Codex Desktop **在进程启动时读取一次** `~/.codex/config.toml`，之后
 
 因此：**修改后需要完全退出并重启桌面应用**，新建对话不会重新加载配置。
 
+重启后可用**一条命令**完成确认与激活：
+
+```bash
+python3 tools/enable-proxy-for-desktop.py          # 检查（不修改）
+python3 tools/enable-proxy-for-desktop.py --apply  # 安全时才写入
+```
+
+脚本会先确认：代理可达 → 系统级 NO_PROXY 已设 → 桌面进程已继承；任一不满足就拒绝修改配置，避免把桌面端推入 502。
+
 重启后用以下脚本确认：
 
 ```bash
