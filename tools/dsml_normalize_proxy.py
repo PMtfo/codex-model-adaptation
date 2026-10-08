@@ -226,7 +226,9 @@ class Handler(BaseHTTPRequestHandler):
                     new_items.append(it)
                     continue
                 text = "".join(c.get("text", "") for c in it.get("content", []) if isinstance(c, dict))
-                if not has_dsml(text):
+                # 使用统一判定：除 DSML 外还覆盖 Anthropic 裸 XML。
+                # 此前这里只判 has_dsml，导致非流式 XML 漏判（实测）。
+                if not has_text_protocol(text):
                     new_items.append(it)
                     continue
                 calls = parse_calls(text)
