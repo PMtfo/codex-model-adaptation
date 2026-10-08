@@ -558,6 +558,8 @@ Codex 在某些模式下（尤其 hook 注入、并发工具调用、或子 agen
 
 **佐证**：MiniMax-M2 issue #69（open）
 
+**本机实测（已复现）**：构造「function_call 与 output 之间插入 developer 消息」后发给 MiniMax M3，返回 `400 function_call 后必须先提供全部 function_call_output`。这与 D4 **同根因** —— 严格校验的网关 + 会插入消息的客户端。因此不是两个独立问题，而是一条通用规则：不要向对话注入 hook 上下文。
+
 ---
 
 ### Qwen
@@ -579,6 +581,8 @@ find_definition(symbol="ToolCallParser")
 畸形、位置参数、未声明工具等无法确定的情况继续走纯文本兜底（fail-closed）。
 
 **佐证**：macprovider PR #160
+
+**本机实测（已复现）**：强制 Qwen3.8 Max 输出 Python 风格调用后，返回 `output` 类型为 `['message']`，未转为 function_call，与上游描述一致。
 
 #### Q2：`<function=NAME>` 隐式开头不被识别（重要，高频）
 
