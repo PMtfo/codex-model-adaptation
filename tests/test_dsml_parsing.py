@@ -95,6 +95,24 @@ case(
 )
 
 
+# 8)　Anthropic 风格裸 XML（无 DSML 标记）
+case(
+    "anthropic xml",
+    '<function_calls>\n<invoke name="shell">\n'
+    '<parameter name="command">echo XML</parameter>\n</invoke>\n</function_calls>',
+    1,
+    ("shell", "echo XML"),
+)
+
+# 9)　仅讨论标签、无完整块结构：parse_calls 不该误产生参数
+case(
+    "xml opener only",
+    'the tag <invoke name="shell"> appears in this doc',
+    1,
+    ("shell", ""),
+)
+
+
 def check_expected(calls, expect_first):
     if expect_first is None:
         return True

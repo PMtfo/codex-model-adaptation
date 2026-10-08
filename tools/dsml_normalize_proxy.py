@@ -34,6 +34,18 @@ PARAM_RE = re.compile(
 )
 
 
+# Anthropic/Claude 风格的裸 XML（无 DSML 标记包裹）。
+# 实测：被测模型在强制文本协议时都可能输出这种形状。
+# 只认「块结构」强信号，避免把讨论文本误判成工具调用。
+XML_INVOKE_RE = re.compile(r"<invoke\s+name\s*=\s*[\"']([^\"'>]+?)[\"']\s*>", re.S)
+XML_PARAM_RE = re.compile(
+    r"<parameter\s+name\s*=\s*[\"']([^\"'>]+?)[\"'][^>]*>(.*?)"
+    r"(?=<parameter\s+name|</parameter>|</invoke>|\Z)",
+    re.S,
+)
+
+
+
 def log(msg):
     try:
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
@@ -47,11 +59,44 @@ def has_dsml(text):
     return bool(re.search(P, text))
 
 
+def has_text_protocol(text):
+    """是否含可解析的文本工具调用块（DSML 或裸 XML）。"""
+    if has_dsml(text):
+        return True
+    if XML_INVOKE_RE.search(text) and ('</invoke>' in text or XML_PARAM_RE.search(text)):
+        return True
+    return False
+
+
 def strip_markers(text):
     return re.sub(rf"</?{P}\s*/?\s*(?:parameter|invoke|calls|tool_?calls?)\s*>", "", text)
 
 
 def parse_calls(text):
+    calls = _parse_dsml(text)
+    if calls:
+        return calls
+    return _parse_xml(text)
+
+
+def _parse_xml(text):
+    """解析 Anthropic 风格裸 XML。无法确定时返回空（fail-closed，不猜测）。"""
+    calls = []
+    for inv in XML_INVOKE_RE.finditer(text):
+        name = inv.group(1).strip()
+        if not name:
+            continue
+        start = inv.end()
+        nxt = XML_INVOKE_RE.search(text, start)
+        seg = text[start:nxt.start()] if nxt else text[start:]
+        args = {}
+        for pm in XML_PARAM_RE.finditer(seg):
+            args[pm.group(1).strip()] = pm.group(2).strip()
+        calls.append({"name": name, "arguments": json.dumps(args, ensure_ascii=False)})
+    return calls
+
+
+def _parse_dsml(text):
     calls = []
     for inv in INVOKE_RE.finditer(text):
         name = inv.group(1).strip()
@@ -272,7 +317,7 @@ class Handler(BaseHTTPRequestHandler):
             if msg_item is not None:
                 if t == "response.output_text.delta":
                     buf += d.get("delta", "")
-                    if has_dsml(buf):
+                    if has_text_protocol(buf):
                         saw = True
                     continue
                 if t in ("response.output_text.done", "response.content_part.added",
@@ -281,7 +326,7 @@ class Handler(BaseHTTPRequestHandler):
                 if t == "response.output_item.done" and isinstance(d.get("item"), dict) \
                         and d["item"].get("type") == "message":
                     mid = msg_item["item"]["id"]
-                    if saw and has_dsml(buf):
+                    if saw and has_text_protocol(buf):
                         calls = parse_calls(buf)
                         if calls:
                             log("stream: normalized %d DSML call(s)" % len(calls))
