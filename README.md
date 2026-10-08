@@ -21,6 +21,8 @@
   - [D3 reasoning effort 档位无区分](#d3-reasoning-effort-档位无区分重要)
   - [D4 hook 上下文插入导致会话永久 400](#d4-hook-上下文插入导致会话永久-400重要)
   - [D5 code-mode host 缺失](#d5-code-mode-host-缺失)
+  - [D6 系统代理拦截回环请求](#d6系统代理拦截回环请求统一报-502阻断级易漏诊)
+  - [D7 CLI 与 host 版本匹配](#d7cli-与-code-mode-host-版本必须匹配阻断级)
 - [三、其他模型适配问题](#三其他模型适配问题)
   - [GLM](#glm)
   - [MiniMax](#minimax)
@@ -42,6 +44,8 @@
 | D3 | `xhigh` 与 `high` 档位 reasoning 无实质差异 | 所有第三方 | 重要 | 需上游修复 |
 | D4 | hook 上下文插入 `function_call` 与 output 之间 → 会话永久 400 | 所有严格校验网关 | 重要 | hook 修复 |
 | D5 | `codex-code-mode-host` 缺失 → 工具无法执行 | code_mode_only 模型 | 阻断 | 软链修复 |
+| D6 | 系统代理拦截回环请求，统一报 502 | 本地代理方案 | 阻断 | wrapper 强制直连 |
+| D7 | CLI 与 code-mode host 版本不匹配 | code_mode_only 模型 | 阻断 | 版本对齐 |
 | G1 | `apply_patch` freeform 契约不匹配 | GLM 系 | 重要 | 适配层 |
 | G2 | 单 chunk 上游导致 tool_call arguments 翻倍 | GLM 系 | 重要 | 适配层 |
 | M1 | 消息顺序校验严格，tool result 必须紧跟 tool call | MiniMax 系 | 阻断 | 顺序修复 |
@@ -321,6 +325,119 @@ ln -sfn \
 ls -la ~/.local/bin/codex-code-mode-host
 # 再跑一次需要工具的会话，确认不再是 failed to spawn
 ```
+
+---
+
+### D6：系统代理拦截回环请求，统一报 502（阻断级，易漏诊）
+
+#### 现象
+
+把 provider `base_url` 指向本地归一化代理（`http://127.0.0.1:8899/v1`）后，
+客户端每次请求都失败：
+
+```text
+unexpected status 502 Bad Gateway: Unknown error, url: http://127.0.0.1:8899/v1/responses
+```
+
+**最容易误判的一点**：代理自身的日志里**没有任何请求记录**，
+而用 `curl` 直接访问同一个地址却完全正常（200）。
+于是很容易得出「代理写错了 / 端口没通」的错误结论。
+
+#### 根因
+
+macOS 系统代理（Clash / Surge 等）会拦截**回环地址**请求。
+即使系统代理的例外列表里已经写了 `127.0.0.1`，部分程序化 HTTP 客户端仍会走代理，
+而代理本身拒绝转发到本地端口，于是返回 502。
+
+踩坑点：**指向一个完全不存在的端口（如 9999）时，报错完全相同**（都是 502），
+因此无法靠错误码区分「代理没通」和「请求被系统代理吃掉了」。
+
+#### 诊断
+
+对照实验即可定位（关键：一个走系统代理，一个不走）：
+
+```bash
+# A. 经系统代理访问本地服务
+curl -x http://127.0.0.1:7897 -m 12 -o /dev/null -w 'via-proxy  HTTP=%{http_code}
+' http://127.0.0.1:8899/
+
+# B. 绕过系统代理直连
+curl --noproxy '*' -m 8 -o /dev/null -w 'direct     HTTP=%{http_code}
+' http://127.0.0.1:8899/
+```
+
+如果 A 返回 502、B 返回 200，即可确认根因。
+
+先查系统代理配置：
+
+```bash
+scutil --proxy | grep -E 'HTTP|HTTPS|SOCKS|Port|Enable'
+```
+
+#### 修复
+
+**方案一（推荐）：为 CLI 加 wrapper，强制回环直连。**
+
+```bash
+#!/bin/zsh
+# ~/.local/bin/codex
+export NO_PROXY="127.0.0.1,localhost,::1,0.0.0.0${NO_PROXY:+,$NO_PROXY}"
+export no_proxy="$NO_PROXY"
+exec "/path/to/real/codex" "$@"
+```
+
+注意：把原来的 `codex` 软链换成 wrapper 前，先记录原目标路径以便回滚。
+
+**方案二：把本地端口加入系统代理的绕过列表**（在代理软件里设置，含端口）。
+
+**已验证但无效的做法**（避免浪费时间）：
+
+- `launchctl setenv NO_PROXY ...` —— 对**已启动**的进程无效；
+- 配置项 `respect_system_proxy=false` —— 实测仍走系统代理，未解决问题。
+
+#### 验证
+
+修复后的决定性证据是**代理日志里出现来自客户端的真实请求**：
+
+```text
+POST /v1/responses len=193991 ua=codex_exec/0.153.0 (Mac OS ...; arm64)
+```
+
+在此之前日志里只有你自己 curl 的记录。
+
+---
+
+### D7：CLI 与 code-mode host 版本必须匹配（阻断级）
+
+#### 现象
+
+工具链整体不可用，模型报告 code-mode host 缺失或无法通信：
+
+```text
+failed to spawn code-mode host /Users/<user>/.local/bin/codex-code-mode-host:
+  No such file or directory (os error 2)
+```
+
+#### 根因
+
+`tool_mode = code_mode_only` 的模型依赖 `codex-code-mode-host`，
+而该二进制**必须与 CLI 版本匹配**。常见组合错误：
+
+- CLI 是 0.153.0，却把 0.162 的 host 软链过来 —— host 能启动，但协议不兼容；
+- 旧版本目录里根本没有 host 二进制。
+
+#### 修复
+
+让 CLI 与 host 同版本。例如使用 Desktop 自带的同版本组合：
+
+```bash
+/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex --version
+# codex-cli 0.162.0-alpha.2
+```
+
+#### 验证
+
+用同版本组合跑一次带工具调用的任务，确认出现 `command_execution` 且 `exit_code=0`。
 
 ---
 

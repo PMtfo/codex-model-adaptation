@@ -71,6 +71,22 @@ def ssl_ctx():
     return ssl.create_default_context()
 
 
+def upstream_url(path: str) -> str:
+    """拼接上游 URL，避免 base 与 path 中的 /v1 重复。
+
+    UPSTREAM 可能形如 https://host/v1，而客户端传来的 path 也可能是 /v1/responses；
+    两者直接相加会得到 /v1/v1/responses（实测 404）。这里做一次归一化：
+    如果 UPSTREAM 已含 /v1 且 path 以 /v1 开头，则去掉 path 的前缀。
+    """
+    base = UPSTREAM.rstrip("/")
+    p = path or "/"
+    if base.endswith("/v1") and p.startswith("/v1"):
+        p = p[3:] or "/"
+    if not p.startswith("/"):
+        p = "/" + p
+    return base + p
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -100,6 +116,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(n) if n else b""
+        log("POST %s len=%d ua=%s" % (self.path, n, (self.headers.get("User-Agent") or "-")[:40]))
         stream = False
         try:
             stream = json.loads(body).get("stream") is True
@@ -111,15 +128,18 @@ class Handler(BaseHTTPRequestHandler):
             self._nonstream(body)
 
     def _nonstream(self, body):
-        req = urllib.request.Request(UPSTREAM + self.path, data=body,
+        req = urllib.request.Request(upstream_url(self.path), data=body,
                                      headers=self._fwd_headers(), method="POST")
         try:
             with urllib.request.urlopen(req, timeout=300, context=ssl_ctx()) as r:
                 raw, code = r.read(), r.status
         except urllib.error.HTTPError as e:
-            self._write_json(e.code, e.read())
+            detail = e.read()
+            log("nonstream upstream HTTPError %d: %s" % (e.code, detail[:300].decode("utf-8", "ignore")))
+            self._write_json(e.code, detail)
             return
         except Exception as e:
+            log("nonstream upstream EXC %s: %r" % (type(e).__name__, e))
             self._write_json(502, json.dumps({"error": {"message": str(e)}}).encode())
             return
         try:
@@ -158,19 +178,26 @@ class Handler(BaseHTTPRequestHandler):
         self._write_json(code, json.dumps(d, ensure_ascii=False).encode())
 
     def _stream(self, body):
-        req = urllib.request.Request(UPSTREAM + self.path, data=body,
+        req = urllib.request.Request(upstream_url(self.path), data=body,
                                      headers=self._fwd_headers(), method="POST")
         try:
             resp = urllib.request.urlopen(req, timeout=300, context=ssl_ctx())
         except urllib.error.HTTPError as e:
-            self._write_json(e.code, e.read())
+            detail = e.read()
+            log("stream upstream HTTPError %d: %s" % (e.code, detail[:300].decode("utf-8", "ignore")))
+            self._write_json(e.code, detail)
             return
         except Exception as e:
+            log("stream upstream EXC %s: %r" % (type(e).__name__, e))
             self._write_json(502, json.dumps({"error": {"message": str(e)}}).encode())
             return
 
+        # 流式响应不使用 Content-Length，靠连接关闭标记正文结束。
+        # 必须同时把 close_connection 设为 True，否则 HTTP/1.1 默认 keep-alive，
+        # 客户端会一直等后续数据并最终报 502（实测）。
         self._hdr(200, "text/event-stream",
                   [("Cache-Control", "no-cache"), ("Connection", "close")])
+        self.close_connection = True
         self.end_headers()
 
         buf = ""
@@ -187,8 +214,9 @@ class Handler(BaseHTTPRequestHandler):
             line = raw.decode("utf-8", "ignore")
             s = line.strip()
             if not s.startswith("data:"):
-                if msg_item is None:
-                    self.wfile.write(raw)
+                # 丢弃上游的 event: 行与空行：事件名统一由 emit() 输出，
+                # 否则会出现 "event: X\nevent: X\ndata:{...}" 的重复前缀，
+                # 客户端无法解析并直接报 502（实测）。
                 continue
             try:
                 d = json.loads(s[5:].strip())
