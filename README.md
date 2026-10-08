@@ -37,21 +37,24 @@
 
 ## 一、问题总览
 
-| 编号 | 问题 | 影响面 | 严重度 | 本仓修复 |
-|---|---|---|---|---|
-| D1 | DSML 工具调用文本未被网关归一化 | DeepSeek 系 | 阻断 | 提供归一化代理 |
-| D2 | provider 名 `OpenAI` 触发远程压缩，但网关无 `/responses/compact` | 所有第三方 | 阻断 | 配置修复 |
-| D3 | `xhigh` 与 `high` 档位 reasoning 无实质差异 | 所有第三方 | 重要 | 需上游修复 |
-| D4 | hook 上下文插入 `function_call` 与 output 之间 → 会话永久 400 | 所有严格校验网关 | 重要 | hook 修复 |
-| D5 | `codex-code-mode-host` 缺失 → 工具无法执行 | code_mode_only 模型 | 阻断 | 软链修复 |
-| D6 | 系统代理拦截回环请求，统一报 502 | 本地代理方案 | 阻断 | wrapper 强制直连 |
-| D7 | CLI 与 code-mode host 版本不匹配 | code_mode_only 模型 | 阻断 | 版本对齐 |
-| G1 | `apply_patch` freeform 契约不匹配 | GLM 系 | 重要 | 适配层 |
-| G2 | 单 chunk 上游导致 tool_call arguments 翻倍 | GLM 系 | 重要 | 适配层 |
-| M1 | 消息顺序校验严格，tool result 必须紧跟 tool call | MiniMax 系 | 阻断 | 顺序修复 |
-| Q1 | `<tool_call>` 内 Python 风格调用不被识别 | Qwen 系 | 重要 | 解析器 |
-| Q2 | `<function=NAME>` 隐式开头不被识别（前言行导致丢调用） | Qwen3-Coder | 重要 | 解析器 |
-| Q3 | 连字符 MCP 工具名被截断 | Qwen / MCP | 重要 | 解析器 |
+| 编号 | 问题 | 影响面 | 严重度 | 本机证据 | 本仓修复 |
+|---|---|---|---|---|---|
+| D1 | DSML / Anthropic XML 文本协议未被归一化 | **所有第三方** | 阻断 | 已复现（代理修复后转换正常） | 归一化代理 |
+| D2 | provider 名 `OpenAI` 触发远程压缩，但网关无 `/responses/compact` | 所有第三方 | 阻断 | 已复现（404 + 400） | 配置修复 |
+| D3 | `xhigh` 对 `high` 的提升幅度远小于名称暗示 | 所有第三方 | 提示 | 已实测（6 采样：+14%） | 需上游说明 |
+| D4 | hook 插入 `function_call` 与 output 之间 → 会话永久 400 | 所有严格校验网关 | 重要 | 已复现 | hook 修复 |
+| D5 | `codex-code-mode-host` 位置错误 → 工具无法执行 | code_mode_only 模型 | 阻断 | 已复现并修复 | 放置到二进制同目录 |
+| D6 | 系统代理拦截回环请求，统一报 502 | 任何本地代理方案 | 阻断 | 已复现（无 NO_PROXY 必 502） | 分层部署 + NO_PROXY |
+| D7 | CLI 与 host 版本不同源 | code_mode_only 模型 | 提示 | 实测可工作（下调为潜在风险） | 建议同源 |
+| G1 | `apply_patch` 返回嵌套对象，与 Codex freeform 契约不符 | **所有第三方** | 重要 | 已复现（**8/8 模型**） | 适配层 |
+| G2 | 单 chunk 上游导致 tool_call arguments 翻倍 | GLM 系 | 重要 | 本网关未复现 | 适配层 |
+| M1 | 消息顺序校验严格 | MiniMax 系 | 重要 | 已复现（与 D4 同根因） | 勿注入 hook 上下文 |
+| Q1 | `<tool_call>` 内 Python 风格调用不被识别 | Qwen 系 | 重要 | 已复现 | 解析器 |
+| Q2 | `<function=NAME>` 隐式开头不被识别 | Qwen3-Coder | 重要 | 已复现并修复 | 解析器 |
+| Q3 | 连字符 MCP 工具名被截断 | Qwen / MCP | 提示 | 本网关未复现 | 解析器 |
+
+> **证据列说明**：`已复现` = 本机实测确认；`未复现` = 本次测试未触发，不代表上游无此问题；
+> `提示` = 严重度经实测下调，不构成阻断。
 
 ---
 
