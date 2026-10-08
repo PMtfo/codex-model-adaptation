@@ -563,18 +563,27 @@ failed to spawn code-mode host /Users/<user>/.local/bin/codex-code-mode-host:
 
 **全部 8 个受测模型 8/8 均返回嵌套形状**。
 
-**端到端后果（实测，严重度高于预期）**：让模型实际去创建一个文件时，
-**所有工具调用均失败**，包括最简单的命令：
+**端到端实测（已跑完，结论与初期推断不同）**：
+
+| 场景 | 结果 |
+|---|---|
+| 不涉及 apply_patch（只跑命令） | ✅ 正常（`echo` 成功） |
+| 要求用 apply_patch 创建文件 | ⚠️ 日志出现 `incompatible payload` 并反复重试，**但最终仍成功创建** |
+
+实测文件：`/tmp/g1test/hello.txt` 内容 `G1TEST`；`/tmp/g1ctrl/ctrl.txt` 内容 `CTRL-B`，**两者都已写入**。
+
+日志中的典型报错（可复现）：
 
 ```text
 ERROR codex_core::tools::router: error=Fatal error: tool exec invoked with incompatible payload
 ```
 
-模型会**反复重试**（实测观察到连续 4+ 次）但始终无法执行，直到被截断。
-因此这不仅是「apply_patch 不生效」，而是**会牵连整个工具链**。
+**修正后的结论**：
 
-**修复方向**：适配层需把 `apply_patch` 的嵌套形状（`{"patch": "..."}`）
-转换为 Codex 期望的 freeform 原始入参；无法确定时 fail-closed。
+- 嵌套形状确实会引发中间层报错与重试，但**当前网关/客户端组合下最终仍能完成写入**；
+- 因此定位为**性能/稳定性隐患**（多次无效重试、耗时），而非硬性阻断；
+- 上游 issue #105 描述的「反复重试到被停止」未在本次测试中复现到那个程度；
+- 仍建议适配层做形状转换，以消除重试开销。
 
 这说明该问题**不限于 GLM**，而是「三方模型按常规 function call 返回」
 与「Codex 把 apply_patch 声明为 freeform」之间的通用契约差异。
