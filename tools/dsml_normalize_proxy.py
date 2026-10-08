@@ -107,11 +107,37 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _fwd_headers(self):
-        return {k: v for k, v in self.headers.items()
-                if k.lower() not in ("host", "content-length", "connection")}
+        # 丢弃 accept-encoding：代理需要对上游响应做 JSON 解析与改写，
+        # 若上游返回压缩内容会解析失败。此处强制请求未压缩响应，
+        # 同时避免把客户端的编码偏好透传造成不一致。
+        # 另外丢弃 host / content-length / connection，由 urllib 重新计算。
+        drop = {"host", "content-length", "connection", "accept-encoding"}
+        hdrs = {k: v for k, v in self.headers.items() if k.lower() not in drop}
+        hdrs["Accept-Encoding"] = "identity"
+        return hdrs
 
     def do_GET(self):
-        self._write_json(200, json.dumps({"status": "ok"}).encode())
+        # 仅根路径作为本地健康检查；其他路径（如 /v1/models）必须转发到上游，
+        # 否则客户端会拿到错误的响应内容（实测 /v1/models 被误答为 {"status":"ok"}）。
+        if self.path in ("/", ""):
+            self._write_json(200, json.dumps({"status": "ok"}).encode())
+            return
+        req = urllib.request.Request(upstream_url(self.path), headers=self._fwd_headers(), method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=120, context=ssl_ctx()) as r:
+                raw, code = r.read(), r.status
+                ctype = r.headers.get("Content-Type", "application/json")
+        except urllib.error.HTTPError as e:
+            raw, code = e.read(), e.code
+            ctype = "application/json"
+        except Exception as e:
+            log("GET upstream EXC %s: %r" % (type(e).__name__, e))
+            self._write_json(502, json.dumps({"error": {"message": str(e)}}).encode())
+            return
+        self._hdr(code, ctype)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
