@@ -131,6 +131,24 @@ Codex  →  http://127.0.0.1:8899/v1  →  dsml_normalize_proxy  →  真实网�
 base_url = 'http://127.0.0.1:8899/v1'
 ```
 
+#### ⚠️ 修改 `base_url` 后必须重启桌面应用
+
+Codex Desktop **在进程启动时读取一次** `~/.codex/config.toml`，之后不会热加载。实测证据：
+
+- Desktop 主进程与其 codex core 进程均启动于 18:05，而配置修改于 22:37；
+- `lsof` 查该进程句柄，**并未打开 config.toml**；
+- 代理日志中只有 `codex_exec`（CLI）来源，无桌面请求。
+
+因此：**修改后需要完全退出并重启桌面应用**，新建对话不会重新加载配置。
+
+重启后用以下脚本确认：
+
+```bash
+python3 tools/verify-proxy-live.py
+```
+
+它会对比代理日志的请求来源与进程启动时间，给出「已生效 / 尚未生效 / 未启用」三种结论。
+
 #### 验证
 
 | 路径 | 用例 | 修复前 | 修复后 |
