@@ -84,13 +84,40 @@ def check_p4() -> tuple[bool, str]:
 
 
 def check_p5() -> tuple[bool, str]:
-    """P5: codex-code-mode-host 必须可解析。"""
-    host = LOCAL_BIN / "codex-code-mode-host"
+    """P5: codex-code-mode-host 必须与 codex 二进制同目录可解析。
+
+    关键：Codex 是在 **codex 可执行文件所在目录** 查找 codex-code-mode-host，
+    而不是在 PATH 里的 ~/.local/bin。放错位置时仍会报
+    "failed to spawn code-mode host <exe_dir>/codex-code-mode-host"。
+    """
+    import re
+    import shutil
+
+    exe = shutil.which("codex")
+    if not exe:
+        return False, "PATH 中找不到 codex"
+    exe = Path(exe).resolve()
+    # 若 codex 是 wrapper 脚本（为了注入 NO_PROXY 等环境变量），
+    # 真正被执行的二进制在其 exec 目标位置，host 必须放在那里。
+    try:
+        head = exe.read_text(encoding="utf-8", errors="ignore")[:2000]
+    except Exception:
+        head = ""
+    m = re.search(r'^\s*exec\s+"([^"]+)"', head, re.M)
+    if m:
+        real = Path(m.group(1)).resolve()
+        exe_dir = real.parent
+    else:
+        exe_dir = exe.parent
+    host = exe_dir / "codex-code-mode-host"
     if not host.exists():
-        return False, "~/.local/bin/codex-code-mode-host 缺失 → code_mode_only 模型工具无法执行"
+        return False, (
+            "%s/codex-code-mode-host 缺失 → code_mode_only 模型工具无法执行"
+            "（注意必须与 codex 二进制同目录，放 ~/.local/bin 无效）" % exe_dir
+        )
     if host.is_symlink() and not host.resolve().exists():
         return False, "符号链接指向的目标不存在"
-    return True, "codex-code-mode-host 可用"
+    return True, "与 codex 同目录可用：%s" % host
 
 
 CHECKS = [

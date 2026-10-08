@@ -294,37 +294,65 @@ Codex 会把工具类 hook 的输出作为 `role: developer` 消息注入会话�
 
 ---
 
-### D5：code-mode host 缺失
+### D5：code-mode host 缺失或位置错误（阻断级）
 
 #### 现象
 
-当模型目录里 `tool_mode = code_mode_only` 时，工具调用走 code-mode host 进程；
-该二进制不存在时报错，工具完全无法执行：
+`tool_mode = code_mode_only` 的模型依赖 `codex-code-mode-host`，
+缺失时报错，**所有工具调用都无法执行**：
 
 ```text
-ERROR codex_core::tools::router: error=failed to spawn code-mode host \
-  /Users/<user>/.local/bin/codex-code-mode-host: No such file or directory (os error 2)
+ERROR codex_core::tools::router: error=failed to spawn code-mode host   <DIR>/codex-code-mode-host: No such file or directory (os error 2)
 ```
 
-典型成因：CLI 与 Desktop 版本不一致——例如 `~/.local/bin/codex` 指向旧版本目录，
-而该版本目录里只有主程序、没有随版本一起发布的 host 二进制。
+#### 根因：查找位置是「codex 二进制所在目录」，不是 PATH
+
+**这是最容易踩错的一点。** 报错里的 `<DIR>` 并非 `~/.local/bin`，
+而是**实际被执行的 codex 二进制所在目录**。
+
+典型陷阱：
+
+- 把 host 软链到 `~/.local/bin/codex-code-mode-host` → **无效**，仍报同样的错；
+- 只有当 host 与真实二进制同目录时才会被找到。
+
+如果 `~/.local/bin/codex` 是 wrapper 脚本（例如为了注入 `NO_PROXY`），
+那么真正执行的是 wrapper 里 `exec` 的目标，host 必须放在**那个目录**。
+
+#### 诊断
+
+先看清报错里的路径，再验证它是否存在：
+
+```bash
+# 找出真实二进制（若是 wrapper，看它的 exec 目标）
+file -L "$(which codex)"
+grep -n 'exec ' "$(which codex)" 2>/dev/null
+
+# 确认 host 是否在二进制同目录
+ls -la "<DIR>/codex-code-mode-host"
+```
 
 #### 修复
 
-把 Desktop 自带的同版本 host 软链到 CLI 同目录：
+把 host 放到**真实二进制同目录**：
 
 ```bash
-ln -sfn \
-  "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex-code-mode-host" \
-  ~/.local/bin/codex-code-mode-host
+ln -sfn "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex-code-mode-host"         "$HOME/.local/codex-0.153.0/codex-code-mode-host"   # 换成你的真实目录
 ```
 
-验证：
+#### 验证
 
-```bash
-ls -la ~/.local/bin/codex-code-mode-host
-# 再跑一次需要工具的会话，确认不再是 failed to spawn
+跑一次带工具调用的任务，确认出现 `command_execution` 且 `exit_code=0`：
+
+```text
+{"type":"item.completed","item":{"type":"command_execution",
+  "command":"/bin/zsh -lc 'echo P5-FIXED'","aggregated_output":"P5-FIXED
+","exit_code":0}}
 ```
+
+#### 注意：版本也要匹配
+
+host 与 CLI **大版本不一致时同样会失败**（host 能启动但协议不兼容）。
+优先使用同一发行来源的同版本二进制，参见 [D7](#d7cli-与-code-mode-host-版本必须匹配阻断级)。
 
 ---
 
