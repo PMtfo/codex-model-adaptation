@@ -103,11 +103,19 @@ def check_p5() -> tuple[bool, str]:
         head = exe.read_text(encoding="utf-8", errors="ignore")[:2000]
     except Exception:
         head = ""
-    m = re.search(r'^\s*exec\s+"([^"]+)"', head, re.M)
-    if m:
-        real = Path(m.group(1)).resolve()
-        exe_dir = real.parent
-    else:
+    # 只接受「绝对路径」的 exec 目标，跳过 exec "$VAR" 这类变量形式：
+    # 变量无法静态解析，若误当成路径会被 Path() 解析成当前工作目录，
+    # 导致自检在特定 cwd 下误报（实测）。
+    cands = re.findall(r'^\s*exec\s+"(/[^"]+)"', head, re.M)
+    if not cands:
+        cands = re.findall(r'^\s*REAL="(/[^"]+)"', head, re.M)
+    exe_dir = None
+    for c in cands:
+        rp = Path(c)
+        if rp.exists() and rp.parent != Path.cwd():
+            exe_dir = rp.resolve().parent
+            break
+    if exe_dir is None:
         exe_dir = exe.parent
     host = exe_dir / "codex-code-mode-host"
     if not host.exists():
