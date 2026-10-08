@@ -1,0 +1,25 @@
+# 日志与运行时产物
+*.log
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 本地配置与凭证（严禁提交）
+*.local.json
+*.env
+secrets*
+cookie*
+auth.json
+*_key
+*token*
+
+# macOS
+.DS_Store
+
+# 编辑器
+.idea/
+.vscode/

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.user.dsml-normalize-proxy</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/sunjingjun/.codex/proxy/dsml_normalize_proxy.py</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/sunjingjun/.codex/proxy/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/sunjingjun/.codex/proxy/launchd.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DSML_UPSTREAM</key>
+    <string>https://your-gateway.example.com/v1</string>
+    <key>DSML_LISTEN_PORT</key>
+    <string>8899</string>
+  </dict>
+</dict>
+</plist>

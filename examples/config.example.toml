@@ -1,0 +1,19 @@
+# 示例：把 provider 指向本地归一化代理
+#
+# 1) 先启动代理（默认监听 127.0.0.1:8899）
+#      python3 tools/dsml_normalize_proxy.py
+# 2) 再把下面这段并入你的 Codex config.toml
+
+model = "deepseek-v4.1-flash"
+model_provider = "my_gateway"
+model_catalog_json = "/path/to/your-model-catalog.json"
+model_reasoning_effort = "xhigh"
+
+[model_providers.my_gateway]
+# 关键点 1：走本地归一化代理，自动修复 DSML 工具调用（见 README D1）
+base_url = "http://127.0.0.1:8899/v1"
+# 关键点 2：显示名不要写成 "OpenAI"，否则会触发远程压缩导致长会话失败（见 README D2）
+name = "My Gateway"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
