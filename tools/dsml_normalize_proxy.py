@@ -331,6 +331,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    # 允许快速重绑定：KeepAlive 重启时旧 socket 可能仍在 TIME_WAIT，
+    # 不加 SO_REUSEADDR 会导致新进程绑定失败，代理长时间不可用
+    # （此刻所有模型请求都要经过本代理，绑定失败等于全局中断）。
+    ThreadingHTTPServer.allow_reuse_address = True
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     log("listening %s:%d -> %s" % (HOST, PORT, UPSTREAM))
     print("dsml-normalize-proxy on %s:%d -> %s" % (HOST, PORT, UPSTREAM))
