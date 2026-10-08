@@ -563,6 +563,19 @@ failed to spawn code-mode host /Users/<user>/.local/bin/codex-code-mode-host:
 
 **全部 8 个受测模型 8/8 均返回嵌套形状**。
 
+**端到端后果（实测，严重度高于预期）**：让模型实际去创建一个文件时，
+**所有工具调用均失败**，包括最简单的命令：
+
+```text
+ERROR codex_core::tools::router: error=Fatal error: tool exec invoked with incompatible payload
+```
+
+模型会**反复重试**（实测观察到连续 4+ 次）但始终无法执行，直到被截断。
+因此这不仅是「apply_patch 不生效」，而是**会牵连整个工具链**。
+
+**修复方向**：适配层需把 `apply_patch` 的嵌套形状（`{"patch": "..."}`）
+转换为 Codex 期望的 freeform 原始入参；无法确定时 fail-closed。
+
 这说明该问题**不限于 GLM**，而是「三方模型按常规 function call 返回」
 与「Codex 把 apply_patch 声明为 freeform」之间的通用契约差异。
 
