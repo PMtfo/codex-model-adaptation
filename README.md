@@ -706,8 +706,10 @@ python3 tests/test_dsml_parsing.py
 | plain text | 0 | 普通文本不应误触发 |
 | marker only | 0 | 仅标记、无块结构，不误判 |
 | runaway invoke name | 0 | 无法确定工具名时 **fail-closed**，不猜测 |
+| anthropic xml | 1 | Anthropic 风格裸 XML（`<function_calls>/<invoke>`，无 DSML 标记） |
+| xml opener only | 1 | 孤立 `<invoke>` 开标识别（参数可为空） |
 
-最后一项是设计决定：名称 runaway 时宁可不返回调用，也不猜测一个可能错误的工具名。
+共 **9 个用例**，后两项对应 **Anthropic 裸 XML** 协议（实测发现各模型在强制文本协议时均可能输出，因此代理也需归一化）。流式与非流式均已覆盖。最后一项是设计决定：名称 runaway 时宁可不返回调用，也不猜测一个可能错误的工具名。
 
 ---
 
