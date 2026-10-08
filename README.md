@@ -671,7 +671,30 @@ python3 tools/dsml_normalize_proxy.py
 
 ---
 
-## 六、快速自检
+## 六、单元测试
+
+DSML 解析器带确定性测试，覆盖标准形态与已知的几类畸形变体：
+
+```bash
+python3 tests/test_dsml_parsing.py
+```
+
+| 用例 | 期望 | 说明 |
+|---|---|---|
+| standard | 1 | 标准 DSML 块 |
+| mis-closed parameter | 1 | 参数闭合标签被误写（占比最高） |
+| two parameters | 1 | 多参数正常闭合 |
+| ascii pipe variant | 1 | 全角竖线被替换为 ASCII 竖线 |
+| plain text | 0 | 普通文本不应误触发 |
+| marker only | 0 | 仅标记、无块结构，不误判 |
+| runaway invoke name | 0 | 无法确定工具名时 **fail-closed**，不猜测 |
+
+最后一项是设计决定：名称 runaway 时宁可不返回调用，也不猜测一个可能错误的工具名。
+
+---
+
+## 七、快速自检
+
 
 ```bash
 python3 tools/deepseek-compat-check.py
@@ -692,7 +715,7 @@ python3 tools/deepseek-compat-check.py
 
 ---
 
-## 七、参考
+## 八、参考
 
 ### 上游 issue / PR
 
