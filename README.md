@@ -23,6 +23,7 @@
   - [D5 code-mode host 缺失](#d5-code-mode-host-缺失)
   - [D6 系统代理拦截回环请求](#d6系统代理拦截回环请求统一报-502阻断级易漏诊)
   - [D7 CLI 与 host 版本匹配](#d7cli-与-code-mode-host-版本必须匹配阻断级)
+  - [D8 Stop 交付门禁无熔断导致持续中止](#d8stop-交付门禁无熔断导致会话持续中止重要)
 - [三、其他模型适配问题](#三其他模型适配问题)
   - [GLM](#glm)
   - [MiniMax](#minimax)
@@ -46,6 +47,7 @@
 | D5 | `codex-code-mode-host` 位置错误 → 工具无法执行 | code_mode_only 模型 | 阻断 | 已复现并修复 | 放置到二进制同目录 |
 | D6 | 系统代理拦截回环请求，统一报 502 | 任何本地代理方案 | 阻断 | 已复现（无 NO_PROXY 必 502） | 分层部署 + NO_PROXY |
 | D7 | CLI 与 host 版本不同源 | code_mode_only 模型 | 提示 | 实测可工作（下调为潜在风险） | 建议同源 |
+| D8 | Stop 交付门禁无熔断 → 阻断/回灌死循环，会话持续中止 | **所有第三方 + 官方** | 重要 | 已复现并修复（单会话 20+ 次） | delivery gate 熔断 |
 | G1 | `apply_patch` 返回嵌套对象，与 Codex freeform 契约不符 | **所有第三方** | 重要 | 已复现（**8/8 模型**） | 适配层 |
 | G2 | 单 chunk 上游导致 tool_call arguments 翻倍 | GLM 系 | 重要 | 本网关未复现 | 适配层 |
 | M1 | 消息顺序校验严格 | MiniMax 系 | 重要 | 已复现（与 D4 同根因） | 勿注入 hook 上下文 |
@@ -745,6 +747,80 @@ LaunchAgent            → launchctl setenv NO_PROXY（持久化，重启后 GUI
 - **`hooks.json` 是热加载的**：修改 hook 后无需重启应用（实测：启动于 18:05 的进程调用了 21:18 才加入的 hook）；
 - **`config.toml` 不热加载**：改 `base_url` / `model` / `model_provider` 后必须重启应用；
 - 可用 `tools/verify-proxy-live.py` 判定改动是否已对桌面端生效。
+
+---
+
+### D8：Stop 交付门禁无熔断导致会话持续中止（重要）
+
+#### 现象
+
+会话每轮刚输出两三句就被 Stop hook 掐回「继续执行」，用户在界面看到模型反复被叫回、
+无法正常结束，表现为「持续中止」。同一次 Stop 会被**两个** hook 源各拦一次：用户级
+`~/.codex/hooks.json` 与已加载插件（如 `dynamic-workflow`）的 `hooks.json`，二者 Stop 段
+调用的是**同一个** `delivery-completion-gate.py`。
+
+#### 根因
+
+`delivery-completion-gate.py` 的 `evaluate()` 原本**没有任何熔断**：只要
+`stop_hook_active=True` 且回复命中任一「未完成 / 承诺」措辞（`INCOMPLETE_PATTERNS` /
+`COMMITMENT_PATTERNS`），就无条件返回 `REPEATED_FOLLOW_UP` 阻断，于是形成
+「阻断 → 回灌 → 模型再答（仍含未完成措辞）→ 再阻断」的稳定死循环。
+
+对照排除：`automation-recovery-gate.py` 有 `recovered_sessions` 一次性熔断，不会循环；
+其 `automation-output-missing` 分支 `eligible=False` 直接放行，也不是循环源。真凶只有
+delivery gate 这一处（与模型厂商无关，官方模型同样会中招）。
+
+#### 最小复现
+
+对同一 `session_id` 连续投递 8 次「未完成」Stop payload：
+
+```bash
+python3 - <<'PY'
+import json, subprocess, os
+hook = os.path.expanduser("~/.codex/hooks/delivery-completion-gate.py")
+for i in range(1, 9):
+    payload = {"hook_event_name": "Stop", "session_id": "S", "turn_id": "t%d" % i,
+               "stop_hook_active": True,
+               "last_assistant_message": "我会继续调研并给出结果。"}
+    out = subprocess.run(["/usr/bin/python3", hook],
+                         input=json.dumps(payload, ensure_ascii=False),
+                         text=True, capture_output=True).stdout
+    print(i, json.loads(out or "{}").get("decision"))
+PY
+```
+
+- 修复前：8 次全部 `block`（永不放行）。
+- 修复后：`['block' x6, None, None]`——前 6 次保留阻断语义，第 7 次起熔断放行。
+
+#### 修复
+
+给 delivery gate 加 per-session Stop 熔断（本仓 `hooks/delivery-completion-gate.py`）：
+
+- 状态文件 `~/.codex/hooks/state/delivery-completion-gate.json`，可用环境变量
+  `CODEX_DELIVERY_COMPLETION_GATE_STATE` 覆盖（测试隔离用）；
+- 键**仅用 `session_id`**：死循环中 `turn_id` 是否稳定未知，而 `session_id` 经
+  `automation-recovery-audit` 证明在同一中止会话内恒定；
+- `MAX_CONSECUTIVE_STOP_BLOCKS=6`：两个 hook 源每次 Stop 各计一次，6 约等于 3 个 Stop 轮次；
+- 连续阻断达上限后 `_stop_blocks_exceeded` 放行；出现完成态时 `_reset_stop_block_count` 清零；
+- 状态写入用临时文件 + `os.replace` 原子落盘，任何异常一律 fail-open（不锁死对话）。
+
+#### 验证
+
+- 全量 `py_compile hooks/*.py hooks/tests/*.py` 通过；
+- 既有 27 个断言 + 新增 2 个熔断回归 = 29 全绿（`hooks/tests/test_delivery_completion_gate.py`）；
+- 端到端 subprocess 8 次连续 Stop = `['block' x6, None, None]`；
+- 线上真实会话状态文件已见多个 session 正常计数到上限后放行。
+
+#### 注意
+
+`hooks.json` 虽热加载（见上「其他环境差异」），但**已在运行的长会话主进程会缓存旧 gate
+逻辑**：修复对磁盘上的新 Stop 调用立即生效，对当前长会话需新开会话或重启主进程后才完全生效。
+
+#### 佐证
+
+本机实测复现：2026-10-09 在同一长会话内 Stop 阻断现场复现 20+ 次；线上熔断状态文件
+`~/.codex/hooks/state/delivery-completion-gate.json` 已记录多个真实 session 计数到上限后放行。
+（本仓 README 与 hook 均为本机部署副本，会话 ID、业务 automation 标识等内部信息未收录。）
 
 ---
 
