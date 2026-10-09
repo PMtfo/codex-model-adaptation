@@ -1,4 +1,4 @@
-# codex-third-party-model-adaptation
+# codex-model-adaptation
 
 把第三方大模型（DeepSeek / GLM / MiniMax / Qwen / Step）接入 Codex 时的兼容性问题、
 复现方法、修复方案与可直接落地的补丁，集中归档在这里。
